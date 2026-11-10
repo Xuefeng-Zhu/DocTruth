@@ -132,8 +132,8 @@ export default function Home() {
       {tab === "ask" ? <Ask key={source} source={source} pages={loaded?.pages} /> : <Drift key={source} source={source} />}
 
       <footer className="foot">
-        Built for the Clocked Build Challenge 2026 · Uses Clocked <code>/rerank</code>, <code>/compare</code>, <code>/grounding</code> and <code>/fill</code> ·{" "}
-        <a href="https://github.com/Xuefeng-Zhu/doctruth">Source on GitHub</a>
+        Built for the Clocked Build Challenge 2026 · Uses Clocked <code>/rerank</code>, <code>/compare</code>, <code>/extract</code>, <code>/grounding</code>, <code>/decide</code> and <code>/fill</code> ·{" "}
+        <a href="https://github.com/Xuefeng-Zhu/DocTruth">Source on GitHub</a>
       </footer>
     </main>
   );
@@ -516,8 +516,18 @@ type DriftResp = {
   docs: { path: string; url: string; text: string }[];
   allPages: string[];
   result: CompareResult;
+  facts: { rows: FactRow[]; count: number; pages: number; credits: number };
   credits: number;
+  compareCredits: number;
   ms: number;
+};
+
+type FactRow = {
+  key: string;
+  label: string;
+  entries: { path: string; setting: string; value: string; start: number; end: number; confidence: number }[];
+  mismatch: boolean;
+  confirmed: boolean;
 };
 
 function Drift({ source }: { source: string }) {
@@ -552,6 +562,8 @@ function Drift({ source }: { source: string }) {
   };
   const conflicts = data ? dedupeFindings(data.result.pairs.flatMap((p) => p.conflicts)) : [];
   const dups = data ? data.result.pairs.reduce((a, p) => a + p.duplicates.length, 0) : 0;
+  const factRows = data?.facts?.rows || [];
+  const extractOnly = factRows.filter((r) => r.mismatch && !r.confirmed);
 
   function issue() {
     const body =
@@ -562,7 +574,13 @@ function Drift({ source }: { source: string }) {
             `${i + 1}. **${c.a.document}** says: "${clean(c.a.quote)}"\n   **${c.b.document}** says: "${clean(c.b.quote)}"\n   ${link(c.a.document, c.a.start)}\n   ${link(c.b.document, c.b.start)}`
         )
         .join("\n\n") +
-      `\n\nFound with Clocked Compare (${data?.credits} credits).`;
+      (extractOnly.length
+        ? `\n\n### Values that differ between pages (Clocked Extract, please review)\n\n` +
+          extractOnly
+            .map((r) => `- **${r.label}**: ` + r.entries.map((e) => `${e.path} says "${e.value}" (${link(e.path, e.start)})`).join("; "))
+            .join("\n")
+        : "") +
+      `\n\nFound with Clocked Compare and Extract (${data?.credits} credits).`;
     navigator.clipboard.writeText(body);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
@@ -573,7 +591,7 @@ function Drift({ source }: { source: string }) {
       <div className="card">
         <h3>Find where your docs contradict themselves</h3>
         <p className="muted">
-          Clocked Compare reads every pair of pages and flags the values, defaults and requirements that disagree, with the passage from each side.
+          Clocked Compare reads every pair of pages and flags the values, defaults and requirements that disagree, with the passage from each side. Clocked Extract reads each page&apos;s hard facts verbatim so DocTruth can line them up side by side.
           Up to 8 pages per scan; the README and docs/ pages come first.
         </p>
         {data && (
@@ -603,6 +621,7 @@ function Drift({ source }: { source: string }) {
             <div><b>{data.result.pairs.length}</b><span>page pairs</span></div>
             <div className={conflicts.length ? "hot" : ""}><b>{conflicts.length}</b><span>conflicts</span></div>
             <div><b>{dups}</b><span>repeated passages</span></div>
+            <div><b>{data.facts?.count ?? 0}</b><span>facts extracted</span></div>
             <div><b>{data.credits}</b><span>credits</span></div>
           </div>
           {conflicts.length > 0 ? (
@@ -617,6 +636,39 @@ function Drift({ source }: { source: string }) {
             </div>
           ) : (
             <div className="card notice">No conflicts between these pages.</div>
+          )}
+          {factRows.length > 0 && (
+            <div className="card">
+              <div className="ans-head">
+                <h3>Fact sheet</h3>
+                <span className="muted small">Clocked Extract · {data.facts.credits} credits</span>
+              </div>
+              <p className="muted small">
+                Extract copied each page&apos;s defaults, versions, ports and limits word for word, with their exact position. These are the facts more than one page states.
+              </p>
+              <table className="facts">
+                <thead>
+                  <tr><th>Setting</th><th>What each page says</th><th>Status</th></tr>
+                </thead>
+                <tbody>
+                  {factRows.map((r) => (
+                    <tr key={r.key} className={r.mismatch ? "bad" : ""}>
+                      <td>{r.label}</td>
+                      <td>
+                        {r.entries.map((e) => (
+                          <div key={e.path}>
+                            <a href={link(e.path, e.start)} target="_blank" rel="noreferrer">{e.path} ↗</a> <b>{e.value}</b>
+                          </div>
+                        ))}
+                      </td>
+                      <td>
+                        {!r.mismatch ? "Consistent" : r.confirmed ? "Differs · Compare agrees" : "Differs · only Extract caught it"}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           )}
         </>
       )}

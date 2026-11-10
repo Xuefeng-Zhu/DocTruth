@@ -141,3 +141,9 @@ table.src tr.used td:first-child { box-shadow: inset 3px 0 0 var(--good); }
   .vs { display: none; }
   .row { flex-direction: column; }
 }
+
+table.facts { width: 100%; border-collapse: collapse; font-size: 14px; margin-top: 8px; }
+table.facts th, table.facts td { text-align: left; padding: 8px 10px; border-top: 1px solid rgba(127,127,127,.2); vertical-align: top; }
+table.facts th { font-weight: 600; opacity: .7; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
+table.facts tr.bad td:last-child { color: #c2410c; font-weight: 600; }
+table.facts td a { margin-right: 6px; }

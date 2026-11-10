@@ -1,6 +1,7 @@
 import { clocked } from "./clocked";
 import { loadCorpus } from "./corpus";
 import type { CompareResult } from "./types";
+import { extractFacts, lineUp } from "./facts";
 
 const PER_DOC = 16_000;
 const TOTAL = 140_000;
@@ -25,17 +26,25 @@ export async function runDrift(source: string, paths?: string[]) {
   }
   docs = picked;
   if (docs.length < 2) throw new Error(TOO_FEW_PAGES);
-  const r = await clocked<CompareResult>("compare", {
-    documents: docs.map((d) => ({ id: d.path, text: d.text.slice(0, PER_DOC) })),
-    instructions: INSTRUCTIONS,
-    evidence: "flagged",
-  });
+  const texts = docs.map((d) => ({ id: d.path, text: d.text.slice(0, PER_DOC) }));
+  const started = Date.now();
+  // Compare judges every pair of pages; Extract reads each page's hard facts verbatim, in parallel.
+  const [r, extracted] = await Promise.all([
+    clocked<CompareResult>("compare", { documents: texts, instructions: INSTRUCTIONS, evidence: "flagged" }),
+    Promise.all(texts.map((t) => extractFacts(t.id, t.text).catch(() => null))),
+  ]);
+  const ok = extracted.filter((x): x is NonNullable<typeof x> => !!x);
+  const facts = ok.flatMap((x) => x.facts);
+  const conflicts = r.data.pairs.flatMap((p) => p.conflicts);
+  const extractCredits = ok.reduce((a, x) => a + x.credits, 0);
   return {
     source: corpus.source,
     docs: docs.map((d) => ({ path: d.path, url: d.url, text: d.text.slice(0, PER_DOC) })),
     allPages: corpus.docs.map((d) => d.path),
     result: r.data,
-    credits: r.credits,
-    ms: r.ms,
+    facts: { rows: lineUp(facts, conflicts), count: facts.length, pages: ok.length, credits: extractCredits },
+    credits: r.credits + extractCredits,
+    compareCredits: r.credits,
+    ms: Date.now() - started,
   };
 }

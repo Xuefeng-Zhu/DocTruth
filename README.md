@@ -4,7 +4,7 @@
 
 Ask a question about a public GitHub project or audit an answer you already have. DocTruth checks claims against selected Markdown passages and links to source lines when Clocked returns evidence. When Clocked flags a disagreement, DocTruth shows both passages and accounts for the conflict when drafting or repairing the answer.
 
-Use **Docs drift scan** to look for conflicting defaults, versions, and requirements across documentation pages. Copy the findings as Markdown for a GitHub issue.
+Use **Docs drift scan** to look for conflicting defaults, versions, and requirements across documentation pages. A fact sheet lines up each page's settings, read verbatim by Clocked Extract. Copy the findings as Markdown for a GitHub issue.
 
 Built for the [Clocked Build Challenge 2026](https://clocked.rezolve.ai/challenge). Watch the [demo with voiceover (1:43)](demo/doctruth-demo.mp4).
 
@@ -72,6 +72,7 @@ node --env-file=.env.local --import tsx scripts/drift.ts
 | Check with **Verify** (`/grounding`) | Classifies claims as supported, contradicted, or not stated in batches of up to 30. A claim attributed to a single identified page is checked against that page. When verification uses multiple batches, **Decide** (`/decide`) scores whether the full answer addresses the question. |
 | Repair with **Fill** and **Verify** | Rewrites unsupported claims and checks the result again. DocTruth keeps a verified rewrite if it has fewer unsupported claims, or if the count ties and its grounding score improves. Empty or unverified rewrites leave the original answer in place. |
 | Scan for drift with **Compare** (`/compare`) | Compares every pair among two to eight selected pages, using up to 16,000 characters per page. The report shows flagged conflicts and counts repeated passages. |
+| Read facts with **Extract** (`/extract`) | Runs alongside the drift scan, one call per page. Copies each page's settings (defaults, versions, ports, limits, flags, environment variables) verbatim with exact offsets. DocTruth lines the values up across pages in a fact sheet, links each value to its source line, and marks every mismatch as confirmed by Compare or caught only by Extract. In the Tidepool sample, Extract catches the Redis 6.2 vs 7.0 requirement that Compare does not flag. Mismatches appear in the copied GitHub issue. |
 
 The app displays Clocked credits for completed runs and end-to-end timing for questions and audits.
 
@@ -89,7 +90,7 @@ The app displays Clocked credits for completed runs and end-to-end timing for qu
 | [`src/app/page.tsx`](src/app/page.tsx) | Browser UI for questions, audits, evidence, and drift reports. |
 | [`src/app/api/`](src/app/api) | `POST /api/corpus` lists available docs, `POST /api/ask` streams newline-delimited JSON events, and `POST /api/drift` returns a JSON report. |
 | [`src/lib/corpus.ts`](src/lib/corpus.ts) | GitHub loader, Markdown chunking, and BM25 retrieval. |
-| [`src/lib/pipeline.ts`](src/lib/pipeline.ts), [`src/lib/drift.ts`](src/lib/drift.ts) | Question, audit, and drift workflows. |
+| [`src/lib/pipeline.ts`](src/lib/pipeline.ts), [`src/lib/drift.ts`](src/lib/drift.ts), [`src/lib/facts.ts`](src/lib/facts.ts) | Question, audit, drift, and fact-sheet workflows. |
 | [`src/lib/clocked.ts`](src/lib/clocked.ts) | Server-side Clocked client with retries, idempotency keys, and credit tracking. |
 | [`src/lib/sample.ts`](src/lib/sample.ts), [`sample-docs/`](sample-docs/) | Tidepool source fixtures and exported Markdown used for line links. |
 
