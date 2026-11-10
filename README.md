@@ -6,7 +6,7 @@ Ask a question about a public GitHub project or audit an answer you already have
 
 Use **Docs drift scan** to look for conflicting defaults, versions, and requirements across documentation pages. A fact sheet lines up each page's settings, read verbatim by Clocked Extract. Copy the findings as Markdown for a GitHub issue.
 
-Built for the [Clocked Build Challenge 2026](https://clocked.rezolve.ai/challenge). Watch the [demo with voiceover (1:43)](demo/doctruth-demo.mp4).
+Built for the [Clocked Build Challenge 2026](https://clocked.rezolve.ai/challenge). Watch the [demo with voiceover (1:55)](demo/doctruth-demo.mp4).
 
 ## Run locally
 
