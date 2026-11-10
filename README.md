@@ -8,7 +8,7 @@ A second tool, **Docs drift scan**, compares the pages of a project's docs again
 
 Built for the [Clocked Build Challenge 2026](https://clocked.rezolve.ai/challenge).
 
-> Demo video: `demo/doctruth-demo.mp4` · Sample project: [`sample-docs/`](sample-docs) (fictional, synthetic docs with planted drift)
+> Demo video (1:43, with voiceover): [demo/doctruth-demo.mp4](demo/doctruth-demo.mp4) · Sample project: [`sample-docs/`](sample-docs) (fictional, synthetic docs with planted drift)
 
 ---
 
