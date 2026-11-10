@@ -47,25 +47,32 @@ export default function Home() {
   const [loadingCorpus, setLoadingCorpus] = useState(false);
   const [corpusErr, setCorpusErr] = useState("");
   const [tab, setTab] = useState<"ask" | "drift">("ask");
+  const corpusRequest = useRef<AbortController | null>(null);
 
   async function loadSource(src: string) {
+    corpusRequest.current?.abort();
+    const controller = new AbortController();
+    corpusRequest.current = controller;
     setLoadingCorpus(true);
     setCorpusErr("");
     try {
-      const r = await fetch("/api/corpus", { method: "POST", body: JSON.stringify({ source: src }) });
+      const r = await fetch("/api/corpus", { method: "POST", body: JSON.stringify({ source: src }), signal: controller.signal });
       const j = await r.json();
       if (!r.ok) throw new Error(j.error);
-      setLoaded({ source: j.source === "sample" ? "sample" : src, label: j.label, pages: j.pages, sections: j.sections });
+      if (!controller.signal.aborted) {
+        setLoaded({ source: j.source === "sample" ? "sample" : src, label: j.label, pages: j.pages, sections: j.sections });
+      }
     } catch (e) {
-      setCorpusErr(e instanceof Error ? e.message : String(e));
+      if (!controller.signal.aborted) setCorpusErr(e instanceof Error ? e.message : String(e));
     } finally {
-      setLoadingCorpus(false);
+      if (!controller.signal.aborted) setLoadingCorpus(false);
     }
   }
 
   const source = loaded?.source || "sample";
   useEffect(() => {
     loadSource("sample");
+    return () => corpusRequest.current?.abort();
   }, []);
 
   return (
@@ -122,7 +129,7 @@ export default function Home() {
         <button className={tab === "drift" ? "on" : ""} onClick={() => setTab("drift")}>Docs drift scan</button>
       </nav>
 
-      {tab === "ask" ? <Ask source={source} pages={loaded?.pages} /> : <Drift source={source} />}
+      {tab === "ask" ? <Ask key={source} source={source} pages={loaded?.pages} /> : <Drift key={source} source={source} />}
 
       <footer className="foot">
         Built for the Clocked Build Challenge 2026 · Uses Clocked <code>/rerank</code>, <code>/compare</code>, <code>/grounding</code> and <code>/fill</code> ·{" "}
@@ -167,8 +174,8 @@ function Ask({ source, pages }: { source: string; pages?: PageInfo[] }) {
     setSelected(null);
   }
 
-  async function run(q = question, a = audit ? pasted : "") {
-    if (!q.trim()) return;
+  async function run(q: string, a?: string) {
+    if (!q.trim() || (a !== undefined && !a.trim())) return;
     abortRef.current?.abort();
     const ctrl = new AbortController();
     abortRef.current = ctrl;
@@ -252,16 +259,18 @@ function Ask({ source, pages }: { source: string; pages?: PageInfo[] }) {
           className="row"
           onSubmit={(e) => {
             e.preventDefault();
-            run();
+            run(question, audit ? pasted : undefined);
           }}
         >
           <input value={question} onChange={(e) => setQuestion(e.target.value)} placeholder="Ask the docs a question…" />
-          <button className="primary" disabled={running || !question.trim()}>{running ? "Checking…" : audit ? "Audit answer" : "Ask"}</button>
+          <button className="primary" disabled={running || !question.trim() || (audit && !pasted.trim())}>
+            {running ? "Checking…" : audit ? "Audit answer" : "Ask"}
+          </button>
         </form>
         {source === "sample" && (
           <div className="chips">
             {SAMPLE_QUESTIONS.map((q) => (
-              <button key={q} onClick={() => { setQuestion(q); setAudit(false); run(q, ""); }} disabled={running}>
+              <button key={q} onClick={() => { setQuestion(q); setAudit(false); run(q); }} disabled={running}>
                 {q}
               </button>
             ))}
@@ -463,34 +472,36 @@ function SourcesTable({ ranked, source, pages, usedIds }: { ranked: Ranked[]; so
           {ranked.filter((r) => r.action === "skip").length} skip
         </span>
       </div>
-      <table className="src">
-        <thead>
-          <tr>
-            <th>Section</th>
-            <th>Decision</th>
-            <th>Answers it</th>
-            <th>Right page</th>
-          </tr>
-        </thead>
-        <tbody>
-          {shown.map((r) => (
-            <tr key={r.chunk.id + r.round} className={usedIds.has(r.chunk.id) ? "used" : ""}>
-              <td>
-                <a href={pageUrl(source, r.chunk.path, r.chunk.line, pages)} target="_blank" rel="noreferrer">
-                  {r.chunk.path}
-                </a>
-                <div className="muted small">{r.chunk.heading}{r.round === 2 ? " · pulled in by expand" : ""}</div>
-              </td>
-              <td>
-                <span className={`badge ${r.action}`}>{r.action}</span>
-                {r.reason && <span className="muted small"> {r.reason.replace("_", " ")}</span>}
-              </td>
-              <td><Bar v={r.relevance_score} /></td>
-              <td><Bar v={r.document_score} /></td>
+      <div className="src-scroll" role="region" aria-label="Ranked documentation sections" tabIndex={0}>
+        <table className="src">
+          <thead>
+            <tr>
+              <th>Section</th>
+              <th>Decision</th>
+              <th>Answers it</th>
+              <th>Right page</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {shown.map((r) => (
+              <tr key={r.chunk.id + r.round} className={usedIds.has(r.chunk.id) ? "used" : ""}>
+                <td>
+                  <a href={pageUrl(source, r.chunk.path, r.chunk.line, pages)} target="_blank" rel="noreferrer">
+                    {r.chunk.path}
+                  </a>
+                  <div className="muted small">{r.chunk.heading}{r.round === 2 ? " · pulled in by expand" : ""}</div>
+                </td>
+                <td>
+                  <span className={`badge ${r.action}`}>{r.action}</span>
+                  {r.reason && <span className="muted small"> {r.reason.replace("_", " ")}</span>}
+                </td>
+                <td><Bar v={r.relevance_score} /></td>
+                <td><Bar v={r.document_score} /></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
       {sorted.length > shown.length && (
         <button className="link" onClick={() => setShowAll(true)}>Show all {sorted.length} sections</button>
       )}
@@ -579,9 +590,10 @@ function Drift({ source }: { source: string }) {
             ))}
           </div>
         )}
-        <button className="primary" disabled={running} onClick={() => scan(data ? picked : undefined)}>
+        <button className="primary" disabled={running || (data !== null && picked.length < 2)} onClick={() => scan(data ? picked : undefined)}>
           {running ? "Comparing pages…" : data ? "Rescan selected pages" : "Scan docs for drift"}
         </button>
+        {data && picked.length < 2 && <p className="muted small" role="status">Select at least two pages to rescan.</p>}
       </div>
       {error && <div className="card err">{error}</div>}
       {data && (

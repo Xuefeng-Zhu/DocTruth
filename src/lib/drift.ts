@@ -4,6 +4,7 @@ import type { CompareResult } from "./types";
 
 const PER_DOC = 16_000;
 const TOTAL = 140_000;
+const TOO_FEW_PAGES = "Pick at least two pages to compare.";
 
 const INSTRUCTIONS =
   "These are pages of one software project's documentation. Report a conflict only when two pages give different values or behavior for the same " +
@@ -11,8 +12,9 @@ const INSTRUCTIONS =
   "Repeated explanations of the same fact are duplicates.";
 
 export async function runDrift(source: string, paths?: string[]) {
+  if (paths && new Set(paths).size < 2) throw new Error(TOO_FEW_PAGES);
   const corpus = await loadCorpus(source);
-  let docs = corpus.docs.filter((d) => !paths?.length || paths.includes(d.path));
+  let docs = paths === undefined ? corpus.docs : corpus.docs.filter((d) => paths.includes(d.path));
   const picked: typeof docs = [];
   let total = 0;
   for (const d of docs) {
@@ -22,7 +24,7 @@ export async function runDrift(source: string, paths?: string[]) {
     total += len;
   }
   docs = picked;
-  if (docs.length < 2) throw new Error("Pick at least two pages to compare.");
+  if (docs.length < 2) throw new Error(TOO_FEW_PAGES);
   const r = await clocked<CompareResult>("compare", {
     documents: docs.map((d) => ({ id: d.path, text: d.text.slice(0, PER_DOC) })),
     instructions: INSTRUCTIONS,

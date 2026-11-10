@@ -10,18 +10,21 @@ const TTL = 30 * 60_000;
 
 /** Parse "owner/repo", "owner/repo@ref", "owner/repo/sub/dir" or a github.com URL. */
 export function parseRepo(input: string) {
-  let s = input.trim().replace(/^https?:\/\/(www\.)?github\.com\//, "").replace(/\.git$/, "");
-  s = s.replace(/\/tree\/([^/]+)/, "@$1/").replace(/\/+$/, "");
-  const m = s.match(/^([\w.-]+)\/([\w.-]+)(?:@([\w./-]+?))?(?:\/(.*))?$/);
+  const source = input.trim();
+  const isUrl = /^https?:\/\/(www\.)?github\.com\//i.test(source);
+  const path = (isUrl ? new URL(source).pathname.slice(1) : source)
+    .replace(/\/+$/, "")
+    .replace(/^([\w.-]+\/[\w.-]+)\.git$/, "$1")
+    .replace(/^([\w.-]+\/[\w.-]+)\/tree\/([^/]+)/, "$1@$2");
+  const m = path.match(/^([\w.-]+)\/([\w.-]+)(?:@([\w.%-]+))?(?:\/(.*))?$/);
   if (!m) throw new Error("Enter a public GitHub repo like owner/repo");
-  const [, owner, repo] = m;
-  let [, , , ref, sub] = m;
-  if (ref && ref.includes("/")) {
-    const [r, ...rest] = ref.split("/");
-    ref = r;
-    sub = [rest.join("/"), sub].filter(Boolean).join("/");
-  }
-  return { owner, repo, ref, sub: sub || "" };
+  const [, owner, repo, ref, sub = ""] = m;
+  return {
+    owner,
+    repo,
+    ref: isUrl && ref ? decodeURIComponent(ref) : ref,
+    sub: isUrl ? decodeURIComponent(sub) : sub,
+  };
 }
 
 async function gh(url: string) {
@@ -62,12 +65,14 @@ export async function loadRepo(input: string): Promise<Corpus> {
   if (!files.length) throw new Error("No Markdown docs found in that repo.");
 
   const docs: Doc[] = [];
+  const refPath = ref.split("/").map(encodeURIComponent).join("/");
   await Promise.all(
     files.map(async (path) => {
-      const res = await fetch(`https://raw.githubusercontent.com/${owner}/${repo}/${ref}/${path}`, { cache: "no-store" });
+      const filePath = path.split("/").map(encodeURIComponent).join("/");
+      const res = await fetch(`https://raw.githubusercontent.com/${owner}/${repo}/${refPath}/${filePath}`, { cache: "no-store" });
       if (!res.ok) return;
       const text = (await res.text()).slice(0, MAX_FILE_CHARS);
-      docs.push({ path, url: `https://github.com/${owner}/${repo}/blob/${ref}/${path}`, text });
+      docs.push({ path, url: `https://github.com/${owner}/${repo}/blob/${refPath}/${filePath}`, text });
     })
   );
   docs.sort((a, b) => files.indexOf(a.path) - files.indexOf(b.path));

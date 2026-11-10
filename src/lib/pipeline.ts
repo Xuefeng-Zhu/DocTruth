@@ -5,6 +5,7 @@ import type { AskEvent, Chunk, CompareResult, RerankResult, VerifyResult } from 
 const CANDIDATES = 40;
 const MAX_SOURCES = 8;
 const VERIFY_THRESHOLD = 0.6;
+const VERIFY_BATCH_SIZE = 30;
 
 const RERANK_INSTRUCTIONS =
   "Passages come from one software project's documentation. 'use' only when the passage itself states the answer for this user. " +
@@ -163,14 +164,30 @@ export async function runAsk(input: AskInput, emit: Emit) {
     const fixNote =
       "A previous answer made these claims that the passages do not support. Remove them. Where a passage gives the correct value, state that value instead; otherwise simply leave the point out:\n" +
       bad.map((c) => `- ${c.claim} (${c.verdict}${c.evidence ? `; passage says: "${c.evidence.quote}"` : ""})`).join("\n");
-    const repaired = await draft(passageText, input.question, conflictNote, fixNote, (c) => (credits += c));
-    emit({ type: "answer", which: "repaired", text: repaired });
-    const v2 = await verify(repaired);
-    emit({ type: "verify", which: "repaired", result: v2 });
-    const bad2 = unsupported(v2).length;
-    const better = bad2 < bad.length || (bad2 === bad.length && v2.grounded > v1.grounded);
-    emit({ type: "repair_result", kept: better ? "repaired" : which });
-    emit({ type: "stage", stage: "repair", status: "done", detail: better ? `${pct(v1.grounded)} → ${pct(v2.grounded)} grounded` : `rewrite scored ${pct(v2.grounded)}, kept the original` });
+    let kept: "draft" | "pasted" | "repaired" = which;
+    let status: "done" | "error" = "done";
+    let detail = "The rewrite was empty. Kept the original.";
+    try {
+      const repaired = await draft(passageText, input.question, conflictNote, fixNote, (c) => (credits += c));
+      if (repaired) {
+        const v2 = await verify(repaired);
+        if (v2.claims.some((c) => c.counted)) {
+          const bad2 = unsupported(v2).length;
+          const better = bad2 < bad.length || (bad2 === bad.length && v2.grounded > v1.grounded);
+          if (better) kept = "repaired";
+          emit({ type: "answer", which: "repaired", text: repaired });
+          emit({ type: "verify", which: "repaired", result: v2 });
+          detail = better ? `${pct(v1.grounded)} → ${pct(v2.grounded)} grounded` : `Rewrite scored ${pct(v2.grounded)}. Kept the original.`;
+        } else {
+          detail = "The rewrite contained no claims to verify. Kept the original.";
+        }
+      }
+    } catch (error) {
+      status = "error";
+      detail = `Kept the original. ${error instanceof Error ? error.message : String(error)}`;
+    }
+    emit({ type: "repair_result", kept });
+    emit({ type: "stage", stage: "repair", status, detail });
   } else {
     emit({ type: "stage", stage: "repair", status: "skipped", detail: "nothing to fix" });
   }
@@ -206,6 +223,7 @@ async function draft(passages: string, question: string, conflictNote: string, f
  */
 export async function verifyAnswer(answer: string, sources: Chunk[], question: string, addCredits: (n: number) => void): Promise<VerifyResult> {
   const clauses = splitClauses(answer);
+  if (!clauses.length) throw new Error("There is no answer to verify.");
   const paths = [...new Set(sources.map((s) => s.path))];
   const groups = new Map<string, { idx: number; text: string }[]>();
   clauses.forEach((text, idx) => {
@@ -214,11 +232,10 @@ export async function verifyAnswer(answer: string, sources: Chunk[], question: s
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key)!.push({ idx, text });
   });
-  const keys = [...groups.keys()];
-  const qKey = keys.length === 1 ? keys[0] : "";
-  // With claims split across pages, ask Decide whether the whole answer addresses the question.
+  const singleBatch = groups.size === 1 && clauses.length <= VERIFY_BATCH_SIZE;
+  // Grounding can assess relevance in one batch. Otherwise Decide sees the whole answer.
   const relevance =
-    qKey === ""
+    !singleBatch
       ? clocked<{ answers: Record<string, { noul: number }> }>("decide", {
           state: `Question: ${question}\n\nAnswer: ${answer}`,
           questions: {
@@ -232,33 +249,40 @@ export async function verifyAnswer(answer: string, sources: Chunk[], question: s
           return r.data.answers?.answers_question?.noul;
         })
       : Promise.resolve(undefined);
-  const results = await Promise.all(
-    keys.map(async (key) => {
-      const docs = key === "*" ? sources : sources.filter((s) => s.path === key);
-      const r = await clocked<VerifyResult>("grounding", {
-        documents: docs.map((s) => ({ id: s.id, text: `Page: ${s.path} › ${s.heading}\n${s.text}` })),
-        answer: groups.get(key)!.map((g) => g.text).join(" "),
-        claims: groups.get(key)!.map((g) => g.text).slice(0, 30),
-        ...(key === qKey ? { question } : {}),
-        evidence: "all",
-        threshold: VERIFY_THRESHOLD,
-        instructions: VERIFY_INSTRUCTIONS,
-      });
-      addCredits(r.credits);
-      return { key, data: r.data };
-    })
-  );
   const claims: VerifyResult["claims"] = new Array(clauses.length);
-  let answers_question: number | undefined = await relevance;
-  for (const { key, data } of results) {
-    groups.get(key)!.forEach((g, i) => {
-      const c = data.claims[i];
-      if (c) claims[g.idx] = { ...c, claim: g.text, scope: key === "*" ? undefined : key } as VerifyResult["claims"][number];
-    });
-    if (key === qKey) answers_question = data.answers_question;
-  }
-  const list = claims.filter(Boolean);
-  const counted = list.filter((c) => c.counted);
+  const [groupRelevance, wholeAnswerRelevance] = await Promise.all([
+    Promise.all([...groups].map(async ([key, group]) => {
+      const docs = key === "*" ? sources : sources.filter((s) => s.path === key);
+      const documents = docs.map((s) => ({ id: s.id, text: `Page: ${s.path} › ${s.heading}\n${s.text}` }));
+      let score: number | undefined;
+      for (let start = 0; start < group.length; start += VERIFY_BATCH_SIZE) {
+        const batch = group.slice(start, start + VERIFY_BATCH_SIZE);
+        const texts = batch.map((g) => g.text);
+        const r = await clocked<VerifyResult>("grounding", {
+          documents,
+          answer: texts.join(" "),
+          claims: texts,
+          ...(singleBatch ? { question } : {}),
+          evidence: "all",
+          threshold: VERIFY_THRESHOLD,
+          instructions: VERIFY_INSTRUCTIONS,
+        });
+        addCredits(r.credits);
+        const checked = r.data?.claims;
+        if (!Array.isArray(checked) || checked.length !== batch.length ||
+          checked.some((c) => !c || typeof c.counted !== "boolean" || typeof c.verdict !== "string" || (c.counted && !Number.isFinite(c.supported)))) {
+          throw new Error("Clocked returned incomplete claim verification.");
+        }
+        batch.forEach((g, i) => {
+          claims[g.idx] = { ...checked[i], claim: g.text, scope: key === "*" ? undefined : key };
+        });
+        score = r.data.answers_question;
+      }
+      return score;
+    })),
+    relevance,
+  ]);
+  const counted = claims.filter((c) => c.counted);
   const total = counted.reduce((a, c) => a + c.claim.length, 0) || 1;
   const grounded = counted.reduce((a, c) => a + c.claim.length * (c.verdict === "supported" ? 1 : c.supported), 0) / total;
   return {
@@ -266,8 +290,8 @@ export async function verifyAnswer(answer: string, sources: Chunk[], question: s
     ungrounded: 1 - grounded,
     verdict: grounded >= VERIFY_THRESHOLD ? "grounded" : "ungrounded",
     threshold: VERIFY_THRESHOLD,
-    claims: list,
-    answers_question,
+    claims,
+    answers_question: singleBatch ? groupRelevance[0] : wholeAnswerRelevance,
   };
 }
 
@@ -276,7 +300,7 @@ function splitClauses(text: string): string[] {
     .replace(/\s+/g, " ")
     .split(/(?<=[.!?])\s+(?=[A-Z`"'(\[]|docs\/)|;\s+|,?\s+while\s+(?=\S+\.mdx?\b)/)
     .map((x) => x.trim())
-    .filter((x) => x.length > 3);
+    .filter(Boolean);
 }
 const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 

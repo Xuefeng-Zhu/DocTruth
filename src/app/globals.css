@@ -106,6 +106,7 @@ input, textarea { font: inherit; color: inherit; }
 .badge.skip { background: #ece8df; color: var(--muted); }
 .badge.contradicted { background: var(--bad-bg); color: var(--bad); }
 
+.src-scroll { overflow-x: auto; }
 table.src { width: 100%; border-collapse: collapse; font-size: 14px; }
 table.src th { text-align: left; font-weight: 600; color: var(--muted); font-size: 12px; padding: 6px 8px; border-bottom: 1px solid var(--line); }
 table.src td { padding: 8px; border-bottom: 1px solid #efebe3; vertical-align: top; }

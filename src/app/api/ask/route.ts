@@ -9,8 +9,18 @@ export async function POST(req: Request) {
   const limited = rateLimit(req);
   if (limited) return limited;
   const body = await req.json().catch(() => ({}));
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return Response.json({ error: "Send a JSON object." }, { status: 400 });
+  }
   const question = String(body.question || "").trim().slice(0, 1000);
   if (!question) return Response.json({ error: "Ask a question." }, { status: 400 });
+  const answer = typeof body.answer === "string" ? body.answer.trim() : undefined;
+  if (body.answer !== undefined && !answer) {
+    return Response.json({ error: "Paste an answer to audit." }, { status: 400 });
+  }
+  if (answer && answer.length > 8000) {
+    return Response.json({ error: "Pasted answers must be 8,000 characters or fewer." }, { status: 400 });
+  }
   const enc = new TextEncoder();
   const stream = new ReadableStream({
     async start(controller) {
@@ -20,7 +30,7 @@ export async function POST(req: Request) {
           {
             source: String(body.source || "sample"),
             question,
-            answer: body.answer ? String(body.answer).slice(0, 8000) : undefined,
+            answer,
             context: body.context ? String(body.context).slice(0, 2000) : undefined,
           },
           emit

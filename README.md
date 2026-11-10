@@ -2,95 +2,99 @@
 
 **Docs answers that show their receipts.**
 
-Ask a question about any public GitHub project and DocTruth answers it from the project's own Markdown docs, then proves it: every claim is checked against the docs, every supported claim links to the exact line, and when two pages of the docs disagree, DocTruth says so instead of silently picking one. Paste an answer from ChatGPT, Copilot or your support bot and DocTruth audits it the same way, then repairs it.
+Ask a question about a public GitHub project or audit an answer you already have. DocTruth checks claims against selected Markdown passages and links to source lines when Clocked returns evidence. When Clocked flags a disagreement, DocTruth shows both passages and accounts for the conflict when drafting or repairing the answer.
 
-A second tool, **Docs drift scan**, compares the pages of a project's docs against each other and lists every contradiction (versions, defaults, ports, limits), ready to paste as a GitHub issue.
+Use **Docs drift scan** to look for conflicting defaults, versions, and requirements across documentation pages. Copy the findings as Markdown for a GitHub issue.
 
-Built for the [Clocked Build Challenge 2026](https://clocked.rezolve.ai/challenge).
+Built for the [Clocked Build Challenge 2026](https://clocked.rezolve.ai/challenge). Watch the [demo with voiceover (1:43)](demo/doctruth-demo.mp4).
 
-> Demo video (1:43, with voiceover): [demo/doctruth-demo.mp4](demo/doctruth-demo.mp4) · Sample project: [`sample-docs/`](sample-docs) (fictional, synthetic docs with planted drift)
+## Run locally
 
----
+Use Node.js 24 or later, npm, and a [Clocked API key](https://clocked.rezolve.ai).
 
-## Who it's for
+```bash
+git clone https://github.com/Xuefeng-Zhu/DocTruth.git
+cd DocTruth
+npm ci
+cp .env.example .env.local
+```
 
-- **Developers** who ask an AI about a library and get a confident answer with a flag that doesn't exist or a default from two versions ago.
-- **Maintainers and docs teams** whose README, guides and FAQ drift apart release after release. Users find the contradiction first; DocTruth finds it before them.
-- **Teams running a docs chatbot** that need a gate: only answers grounded in the docs reach users.
+Set `CLOCKED_API_KEY` in `.env.local`, then start the development server.
+
+```bash
+npm run dev
+```
+
+Open [http://localhost:3000](http://localhost:3000).
+
+| Environment variable | Required | Purpose |
+| --- | --- | --- |
+| `CLOCKED_API_KEY` | Yes | Server-side key for questions, audits, and drift scans. |
+| `GITHUB_TOKEN` | No | Raises the GitHub API rate limit for repository metadata and tree requests. |
+| `DOCTRUTH_RATE_LIMIT` | No | Caps combined question, audit, and drift requests per IP in a 10-minute window. Defaults to 30 per server process. |
+| `CLOCKED_BASE_URL` | No | Overrides the server-side Clocked API base URL. |
+| `NEXT_PUBLIC_SAMPLE_REPO_URL` | No | Overrides the GitHub URL prefix for sample evidence links. For a custom sample, use `https://github.com/OWNER/REPO/blob/REF/sample-docs`. |
+
+## Try it in the browser
+
+1. Leave **Sample project** selected to use Tidepool, a fictional job queue with seven docs pages. In **Ask & verify**, try **Audit a chatbot’s answer** to check a pasted answer about the dashboard. Click a claim to inspect its verdict and any evidence.
+2. Open **Docs drift scan**, then click **Scan docs for drift**. Look for the dashboard port conflict. The [sample README](sample-docs/README.md) says 4000, while the [dashboard guide](sample-docs/docs/dashboard.md) says 3000. Select at least two pages to rescan, or use **Copy as GitHub issue** to copy the findings to your clipboard.
+3. To use your own source, choose **GitHub repo**, enter a public repository such as `owner/repo` or a docs subdirectory such as `owner/repo/docs`, and click **Load docs**. You can also paste a GitHub repository or folder URL, or specify a ref such as `owner/repo@v1.2.0`. Add optional version or platform context when asking a question.
+
+The Tidepool installation commands and conflicting settings are part of the synthetic sample. They let you see how DocTruth handles conflicting sources and unsupported claims.
+
+## Try it from the command line
+
+Run these commands from the repository root. The standalone scripts load your key through Node's `--env-file` flag.
+
+```bash
+# Ask about the sample.
+node --env-file=.env.local --import tsx scripts/try.ts "How many times is a failed job retried?"
+
+# Audit a pasted answer.
+node --env-file=.env.local --import tsx scripts/try.ts "What port does the dashboard use?" "It uses port 4000."
+
+# Ask about a public repo. The empty second argument leaves audit mode off.
+node --env-file=.env.local --import tsx scripts/try.ts "How do I set a timeout?" "" sindresorhus/ky
+
+# Scan the sample for drift. Pass owner/repo to scan a public repo instead.
+node --env-file=.env.local --import tsx scripts/drift.ts
+```
 
 ## How it uses Clocked
 
-DocTruth is built around Clocked's knowledge layer, **Verify, Compare and Rerank**, with Fill and Decide in supporting roles. Every call's output changes what the app does or shows.
+| Step | What DocTruth does |
+| --- | --- |
+| Retrieve | A local BM25 search selects up to 40 Markdown sections for the first Rerank pass. |
+| Rank with **Rerank** (`/rerank`) | Prioritizes sections marked `use` and can rerank unseen neighbors of sections marked `expand`. An answer uses up to eight sections. If none are marked `use`, DocTruth skips drafting or audits a pasted answer against up to five closest sections. |
+| Cross-check with **Compare** (`/compare`) | When the selected sections span multiple pages, Compare flags disagreements. DocTruth shows the conflicts and passes them to Fill. |
+| Draft with **Fill** (`/fill`) | Drafts an answer from the selected passages. Audit mode starts with the pasted answer. |
+| Check with **Verify** (`/grounding`) | Classifies claims as supported, contradicted, or not stated in batches of up to 30. A claim attributed to a single identified page is checked against that page. When verification uses multiple batches, **Decide** (`/decide`) scores whether the full answer addresses the question. |
+| Repair with **Fill** and **Verify** | Rewrites unsupported claims and checks the result again. DocTruth keeps a verified rewrite if it has fewer unsupported claims, or if the count ties and its grounding score improves. Empty or unverified rewrites leave the original answer in place. |
+| Scan for drift with **Compare** (`/compare`) | Compares every pair among two to eight selected pages, using up to 16,000 characters per page. The report shows flagged conflicts and counts repeated passages. |
 
-| Step | Clocked endpoint | What its output decides |
-| --- | --- | --- |
-| 1. Retrieve | (local BM25) | Bounds the candidate set to 40 sections so Rerank cost stays predictable. |
-| 2. Rank | **Rerank** `/rerank` | `use` sections become the sources. `expand` means "right page, answer is nearby": DocTruth pulls the neighbouring sections and reranks them in a second round. `skip` sections (with reason `unrelated` or `different_case`) are dropped. Optional user context (version, platform) is passed as Rerank `context`. If nothing is `use`, DocTruth refuses to answer instead of guessing. |
-| 3. Cross-check sources | **Compare** `/compare` | The chosen sources are compared with each other. Any `conflicts` are shown to the user with both passages, **and** fed into the drafting instructions so the answer reports the disagreement ("README.md says X, while docs/install.md says Y"). |
-| 4. Draft | Fill `/fill` (generate field) | Writes the answer from the sources only. Skipped in audit mode, where the user pastes someone else's answer. |
-| 5. Verify | **Verify** `/grounding` | Every sentence gets `supported` / `contradicted` / `not_stated` with probabilities and an evidence quote. Sentences that attribute something to one page ("README.md says…") are verified against that page alone, so an honest report of a disagreement isn't marked as contradicted by the other page. The UI highlights each claim and links its evidence to the line on GitHub. |
-| 5b. Relevance | Decide `/decide` | When claims were checked in page-scoped groups, Decide scores whether the whole answer addresses the question. |
-| 6. Repair | Fill + Verify | Unsupported claims (with the passage that contradicts them) go back into Fill as "remove or correct these". The rewrite is re-verified and kept **only if** it has fewer unsupported claims. |
-| Drift scan | **Compare** `/compare` | Up to 8 whole pages, every pair compared; conflicts listed side by side with line links, exportable as a GitHub issue. |
-
-Typical cost on the sample project: 30 to 60 credits per question end to end, about 3 seconds. A drift scan of 7 pages (21 pairs): about 26 credits.
-
-### Example (sample project)
-
-Pasted answer: *"The Tidepool dashboard runs on port 4000 and is read-only, so it cannot delete jobs. You can turn on single sign-on with the --sso flag."*
-
-- Rerank: `README.md › Dashboard` = **use**; three `docs/dashboard.md` sections = **expand** (right page).
-- Compare: README says port **4000**, `docs/dashboard.md` says **3000** → conflict.
-- Verify: claim 1 **contradicted** (the dashboard page says it can delete jobs), claim 2 **not stated** (there is no `--sso`). 2% grounded.
-- Repair: *"README.md says it opens on port 4000, while docs/dashboard.md says it listens on port 3000 by default. The dashboard can delete jobs."* → **100% grounded**.
-
-## Run it locally
-
-Requirements: Node.js 20+ and a Clocked API key (free account at [clocked.rezolve.ai](https://clocked.rezolve.ai), plus the hackathon credit code from the challenge page).
-
-```bash
-git clone https://github.com/Xuefeng-Zhu/doctruth
-cd doctruth
-npm install
-cp .env.example .env.local   # then put your key in CLOCKED_API_KEY
-npm run dev                  # http://localhost:3000
-```
-
-Environment variables:
-
-| Name | Required | Purpose |
-| --- | --- | --- |
-| `CLOCKED_API_KEY` | yes | Clocked account API key. Used server-side only, never sent to the browser. |
-| `GITHUB_TOKEN` | no | Raises GitHub's API rate limit when loading repos (any read-only token). |
-| `DOCTRUTH_RATE_LIMIT` | no | Requests per IP per 10 minutes on a public deployment (default 30). |
-
-Try it from the command line:
-
-```bash
-npx tsx scripts/try.ts "How many times is a failed job retried?"
-npx tsx scripts/try.ts "What port does the dashboard use?" "It uses port 4000."   # audit mode
-npx tsx scripts/try.ts "How do I set a timeout?" "" sindresorhus/ky               # any public repo
-npx tsx scripts/drift.ts                                                         # drift scan of the sample
-```
-
-## Architecture
-
-```
-src/lib/clocked.ts    Clocked client: idempotency keys, retries on 409/429/5xx with the same key, credit tracking
-src/lib/corpus.ts     GitHub loader (tree API + raw files, README and docs/ first), heading-aware chunker, BM25 prefilter
-src/lib/pipeline.ts   Rerank → expand → Compare → Fill → Verify (+ Decide) → repair; streamed as NDJSON events
-src/lib/drift.ts      Whole-page Compare for the drift scan
-src/app/api/*         Route handlers: /api/ask (streaming), /api/drift, /api/corpus
-src/app/page.tsx      UI: live pipeline, claim highlighting, evidence links, Rerank table, drift report
-sample-docs/          The synthetic Tidepool docs used in the demo
-```
+The app displays Clocked credits for completed runs and end-to-end timing for questions and audits.
 
 ## Data and limits
 
-- Only public GitHub repos and the bundled synthetic sample are read. Nothing is stored; loaded docs are cached in memory for 30 minutes.
-- Up to 80 Markdown files per repo; translated docs, tests and vendored folders are skipped.
-- Verify measures support in the docs, not truth in the world. A claim marked "not in docs" may still be true; it just isn't documented.
+- The GitHub loader reads up to 80 Markdown or MDX files, with a cap of 60,000 characters per file. It prioritizes the root README and documentation directories.
+- The web app accepts pasted answers up to 8,000 characters.
+- DocTruth has no application database. It reuses GitHub docs from its in-memory cache for up to 30 minutes. Clocked receives documentation passages and related paths or headings, the question, optional ranking context, and the answer text it checks or repairs, including pasted answers.
+- Verification measures support in the selected passages. A claim marked **not stated** may still be true or documented elsewhere. Drift scans cover the selected pages and can miss conflicts outside that scope.
+
+## Repository guide
+
+| Path | Role |
+| --- | --- |
+| [`src/app/page.tsx`](src/app/page.tsx) | Browser UI for questions, audits, evidence, and drift reports. |
+| [`src/app/api/`](src/app/api) | `POST /api/corpus` lists available docs, `POST /api/ask` streams newline-delimited JSON events, and `POST /api/drift` returns a JSON report. |
+| [`src/lib/corpus.ts`](src/lib/corpus.ts) | GitHub loader, Markdown chunking, and BM25 retrieval. |
+| [`src/lib/pipeline.ts`](src/lib/pipeline.ts), [`src/lib/drift.ts`](src/lib/drift.ts) | Question, audit, and drift workflows. |
+| [`src/lib/clocked.ts`](src/lib/clocked.ts) | Server-side Clocked client with retries, idempotency keys, and credit tracking. |
+| [`src/lib/sample.ts`](src/lib/sample.ts), [`sample-docs/`](sample-docs/) | Tidepool source fixtures and exported Markdown used for line links. |
+
+If you change the Tidepool fixtures in `src/lib/sample.ts`, run `node --import tsx scripts/export-sample.ts` from the repository root. Publish the exported pages alongside the fixture changes so evidence links land on the right lines.
 
 ## License
 
-MIT
+[MIT](LICENSE)
